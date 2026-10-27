@@ -47,3 +47,29 @@ auto_approve: false
 # Mouse wheel scrolls the chat. While on, hold Shift to select/copy text with
 # the mouse. Set false to restore normal mouse selection. (CONVERSE_TUI_MOUSE)
 mouse: true
+
+# --- Look & feel -----------------------------------------------------------
+
+# Welcome banner. "text" is drawn as ASCII art in a FIGlet "font"
+# (standard, slant, small, big, doom, banner, block, ...). Or paste your own
+# ASCII art into "art" (it wins over text/font). Set show: false to hide it.
+banner:
+  show: true
+  text: "converse"
+  font: "standard"
+  title: "Welcome to converse-tui"
+  # art: |
+  #    _  _ ___ _    _    ___
+  #   | || | __| |  | |  / _ \
+  #   | __ | _|| |__| |_| (_) |
+  #   |_||_|___|____|____\___/
+
+# Accent color for the banner, borders and highlights: hex ("#d97757") or an
+# ANSI color number ("208").
+accent_color: "#d97757"
+
+# "dark" or "light" terminal background.
+theme: dark
+
+# Render replies as markdown (headings, lists, code blocks).
+markdown: true

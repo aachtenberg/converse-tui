@@ -111,10 +111,15 @@ func run() error {
 		return err
 	}
 
+	banner, err := ui.RenderBanner(cfg.Banner)
+	if err != nil {
+		return err
+	}
+
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
 	if cfg.MouseEnabled() {
 		opts = append(opts, tea.WithMouseCellMotion())
 	}
-	_, err = tea.NewProgram(ui.New(client, runner, cfg.ModelID, cfg.AutoApprove), opts...).Run()
+	_, err = tea.NewProgram(ui.New(client, runner, ui.Options{Config: cfg, Banner: banner}), opts...).Run()
 	return err
 }

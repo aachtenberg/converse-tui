@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/charmbracelet/bubbles/key"
@@ -13,28 +14,17 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/aachtenberg/converse-tui/internal/chat"
+	"github.com/aachtenberg/converse-tui/internal/config"
 	"github.com/aachtenberg/converse-tui/internal/tools"
 )
 
-var (
-	headerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	userStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
-	botStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
-	toolStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	addStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	delStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	warnStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
-	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	inputStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8"))
-)
-
 const (
-	inputHeight   = 3
-	maxToolRounds = 25
+	maxInputHeight = 8
+	maxToolRounds  = 25
 )
 
 type role int
@@ -43,19 +33,32 @@ const (
 	roleUser role = iota
 	roleAssistant
 	roleTool
+	roleInfo
 )
 
 type entry struct {
 	role    role
 	text    string
+	label   string   // tool calls: e.g. Update(main.go)
 	preview []string // diff-style lines for tool calls
 	note    string   // stop reason / error / tool result shown under the entry
 	err     bool
+	done    bool // tool call finished
+
+	// Cached markdown rendering of a finished assistant message.
+	rendered      string
+	renderedWidth int
 }
 
 type chunkMsg struct {
 	ev chat.Event
 	ch <-chan chat.Event
+}
+
+// Options configures the UI.
+type Options struct {
+	Config config.Config
+	Banner string // rendered banner art; empty hides it
 }
 
 // Model is the root Bubble Tea model.
@@ -64,6 +67,13 @@ type Model struct {
 	tools   *tools.Runner // nil when tools are disabled
 	modelID string
 	auto    bool // approve file-changing tools without asking
+	banner  string
+	title   string
+	th      theme
+
+	markdown bool
+	md       *glamour.TermRenderer
+	mdWidth  int
 
 	history   []types.Message // what is sent to Bedrock
 	entries   []entry         // what is rendered
@@ -72,8 +82,9 @@ type Model struct {
 	// Tool calls from the last response still to run, and results so far.
 	pending  []chat.ToolUse
 	results  []types.ContentBlock
-	awaiting bool // waiting for y/n on pending[0]
+	awaiting bool // waiting for approval of pending[0]
 	outside  bool // pending[0] touches a path outside the working directory
+	choice   int  // highlighted option in the approval prompt
 	rounds   int
 
 	vp viewport.Model
@@ -81,29 +92,53 @@ type Model struct {
 	sp spinner.Model
 
 	streaming bool
+	started   time.Time
 	cancel    context.CancelFunc
 	width     int
+	height    int
 	ready     bool
 	inTok     int32
 	outTok    int32
 }
 
 // New creates the UI model. runner may be nil.
-func New(client *chat.Client, runner *tools.Runner, modelID string, auto bool) Model {
+func New(client *chat.Client, runner *tools.Runner, opts Options) Model {
+	th := newTheme(opts.Config)
+
 	ta := textarea.New()
-	ta.Placeholder = "Ask something… (Enter to send, Alt+Enter / Ctrl+J for newline)"
+	ta.Placeholder = "Type a message · /help for commands"
 	ta.ShowLineNumbers = false
-	ta.Prompt = ""
 	ta.CharLimit = 0
-	ta.SetHeight(inputHeight)
+	ta.SetHeight(1)
+	ta.SetPromptFunc(2, func(line int) string {
+		if line == 0 {
+			return "> "
+		}
+		return "  "
+	})
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "ctrl+j"))
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.Prompt = th.dim
+	ta.FocusedStyle.Placeholder = th.faint
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
 	ta.Focus()
 
 	sp := spinner.New()
-	sp.Spinner = spinner.Dot
+	sp.Spinner = spinner.Spinner{Frames: spinnerFrames, FPS: 120 * time.Millisecond}
+	sp.Style = th.accent
 
-	return Model{client: client, tools: runner, modelID: modelID, auto: auto, ta: ta, sp: sp}
+	return Model{
+		client:   client,
+		tools:    runner,
+		modelID:  opts.Config.ModelID,
+		auto:     opts.Config.AutoApprove,
+		banner:   opts.Banner,
+		title:    opts.Config.Banner.Title,
+		th:       th,
+		markdown: opts.Config.MarkdownEnabled(),
+		ta:       ta,
+		sp:       sp,
+	}
 }
 
 func (m Model) Init() tea.Cmd { return textarea.Blink }
@@ -123,19 +158,14 @@ func waitFor(ch <-chan chat.Event) tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.ta.SetWidth(msg.Width - 2)
-		vpHeight := msg.Height - 1 /*header*/ - (inputHeight + 2) /*input+border*/ - 1 /*status*/
-		if vpHeight < 1 {
-			vpHeight = 1
-		}
+		m.width, m.height = msg.Width, msg.Height
+		m.ta.SetWidth(max(msg.Width-4, 10)) // border + padding
 		if !m.ready {
-			m.vp = viewport.New(msg.Width, vpHeight)
+			m.vp = viewport.New(msg.Width, 1)
 			m.vp.KeyMap = viewportKeys()
 			m.ready = true
-		} else {
-			m.vp.Width, m.vp.Height = msg.Width, vpHeight
 		}
+		m.vp.Width = msg.Width
 		m.refresh(true)
 		return m, nil
 
@@ -147,11 +177,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "ctrl+t":
-			m.auto = !m.auto
-			if m.awaiting && m.auto && !m.outside {
-				return m, m.approve(true)
-			}
-			return m, nil
+			return m, m.toggleAuto()
 		case "esc":
 			if m.streaming && m.cancel != nil {
 				m.cancel()
@@ -173,26 +199,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if m.awaiting {
-			switch msg.String() {
-			case "y", "Y", "enter":
-				return m, m.approve(true)
-			case "n", "N":
-				return m, m.approve(false)
-			case "a", "A":
-				if m.outside {
-					return m, nil
-				}
-				m.auto = true
-				return m, m.approve(true)
-			}
-			return m, nil
+			return m, m.approvalKey(msg.String())
 		}
 		switch msg.String() {
 		case "ctrl+n":
 			if !m.busy() {
-				m.history, m.entries = nil, nil
-				m.inTok, m.outTok = 0, 0
-				m.refresh(true)
+				m.reset()
 			}
 			return m, nil
 		case "enter":
@@ -204,6 +216,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.ta.Reset()
+			m.fitInput()
+			if strings.HasPrefix(text, "/") {
+				return m, m.command(text)
+			}
 			m.rounds = 0
 			m.entries = append(m.entries, entry{role: roleUser, text: text})
 			if n := len(m.history); n > 0 && m.history[n-1].Role == types.ConversationRoleUser {
@@ -246,14 +262,98 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.ta, cmd = m.ta.Update(msg)
+	if m.fitInput() {
+		m.refresh(m.vp.AtBottom())
+	}
 	return m, cmd
 }
+
+// fitInput grows the input box with its content; it reports whether the
+// height changed.
+func (m *Model) fitInput() bool {
+	w := max(m.ta.Width(), 1)
+	rows := 0
+	for _, line := range strings.Split(m.ta.Value(), "\n") {
+		rows += max(1, (lipgloss.Width(line)+w)/w)
+	}
+	h := min(max(rows, 1), maxInputHeight)
+	if h == m.ta.Height() {
+		return false
+	}
+	m.ta.SetHeight(h)
+	return true
+}
+
+func (m *Model) reset() {
+	m.history, m.entries = nil, nil
+	m.inTok, m.outTok = 0, 0
+	m.refresh(true)
+}
+
+func (m *Model) toggleAuto() tea.Cmd {
+	if m.tools == nil {
+		return nil
+	}
+	m.auto = !m.auto
+	if m.awaiting && m.auto && !m.outside {
+		return m.approve(true)
+	}
+	m.refresh(m.vp.AtBottom())
+	return nil
+}
+
+func (m *Model) info(text string) {
+	m.entries = append(m.entries, entry{role: roleInfo, text: text})
+	m.refresh(true)
+}
+
+// command runs a slash command.
+func (m *Model) command(text string) tea.Cmd {
+	switch strings.Fields(text)[0] {
+	case "/help", "/?":
+		m.info(helpText)
+	case "/clear", "/new":
+		m.reset()
+	case "/auto":
+		if m.tools == nil {
+			m.info("File tools are disabled.")
+			return nil
+		}
+		cmd := m.toggleAuto()
+		state := "off"
+		if m.auto {
+			state = "on"
+		}
+		m.info("Auto-accept edits " + state + ".")
+		return cmd
+	case "/exit", "/quit":
+		return tea.Quit
+	default:
+		m.info("Unknown command " + text + " · /help lists commands")
+	}
+	return nil
+}
+
+const helpText = `Commands
+  /help          show this help
+  /clear, /new   start a new conversation
+  /auto          toggle auto-accept for file edits
+  /exit          quit
+
+Keys
+  enter              send            alt+enter, ctrl+j   new line
+  esc                interrupt       ctrl+t              toggle auto-accept
+  wheel, pgup/pgdn   scroll          shift+↑/↓           scroll a line
+  ctrl+home/end      top / bottom    ctrl+c              quit`
 
 func (m *Model) startStream() tea.Cmd {
 	m.entries = append(m.entries, entry{role: roleAssistant})
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.streaming = true
+	if m.rounds == 0 {
+		m.started = time.Now()
+	}
 	m.refresh(true)
 	return tea.Batch(waitFor(m.client.Stream(ctx, m.history)), m.sp.Tick)
 }
@@ -308,7 +408,7 @@ func (m *Model) runTools() tea.Cmd {
 	for len(m.pending) > 0 {
 		tu := m.pending[0]
 		t, known := m.tools.Get(tu.Name)
-		e := entry{role: roleTool, text: tools.Summary(tu.Name, tu.Input)}
+		e := entry{role: roleTool, label: toolLabel(tu.Name, tu.Input)}
 		if known && t.Mutating {
 			e.preview = tools.Preview(tu.Name, tu.Input)
 		}
@@ -316,11 +416,11 @@ func (m *Model) runTools() tea.Cmd {
 		// even in auto mode.
 		m.outside = known && m.tools.Outside(tu.Input)
 		if m.outside {
-			e.note, e.err = "outside working directory", true
+			e.note = "outside working directory"
 		}
 		m.entries = append(m.entries, e)
 		if m.outside || (known && t.Mutating && !m.auto) {
-			m.awaiting = true
+			m.awaiting, m.choice = true, 0
 			return nil
 		}
 		m.execPending()
@@ -328,20 +428,64 @@ func (m *Model) runTools() tea.Cmd {
 	return m.sendResults()
 }
 
+// approvalOptions lists the choices for the current prompt.
+func (m *Model) approvalOptions() []string {
+	if m.outside {
+		return []string{"Yes", "No, and tell the model (esc to stop)"}
+	}
+	return []string{"Yes", "Yes, and auto-accept edits this session (ctrl+t)", "No, and tell the model (esc to stop)"}
+}
+
+func (m *Model) approvalKey(k string) tea.Cmd {
+	opts := m.approvalOptions()
+	pick := -1
+	switch k {
+	case "up", "k":
+		m.choice = (m.choice + len(opts) - 1) % len(opts)
+	case "down", "j", "tab":
+		m.choice = (m.choice + 1) % len(opts)
+	case "enter":
+		pick = m.choice
+	case "y", "Y", "1":
+		pick = 0
+	case "a", "A":
+		if !m.outside {
+			pick = 1
+		}
+	case "2", "3":
+		if i := int(k[0] - '1'); i < len(opts) {
+			pick = i
+		}
+	case "n", "N":
+		pick = len(opts) - 1
+	}
+	if pick < 0 {
+		m.refresh(m.vp.AtBottom())
+		return nil
+	}
+	switch {
+	case pick == 0:
+		return m.approve(true)
+	case pick == len(opts)-1:
+		return m.approve(false)
+	default: // auto-accept
+		m.auto = true
+		return m.approve(true)
+	}
+}
+
 // approve resolves the approval prompt for pending[0].
 func (m *Model) approve(ok bool) tea.Cmd {
 	m.awaiting = false
-	if !ok {
-		m.outside = false
-	}
 	if ok {
 		m.execPending()
 	} else {
+		m.outside = false
 		tu := m.pending[0]
 		m.pending = m.pending[1:]
 		m.results = append(m.results, chat.ToolResult(tu.ID, "The user denied this action.", true))
 		last := &m.entries[len(m.entries)-1]
-		last.note, last.err = "denied", true
+		last.note, last.err, last.done = "denied", true, true
 	}
 	cmd := m.runTools()
 	m.refresh(true)
@@ -353,6 +497,7 @@ func (m *Model) execPending() {
 	tu := m.pending[0]
 	m.pending = m.pending[1:]
 	last := &m.entries[len(m.entries)-1]
+	last.done = true
 	out, err := m.tools.Run(tu.Name, tu.Input, m.outside)
 	m.outside = false
 	if err != nil {
@@ -388,7 +533,7 @@ func (m *Model) cancelTurn() {
 	m.streaming, m.awaiting, m.outside = false, false, false
 	m.pending, m.results = nil, nil
 	last := &m.entries[len(m.entries)-1]
-	last.note, last.err = "cancelled", true
+	last.note, last.err, last.done = "interrupted", true, true
 }
 
 // abortTurn drops the current turn from the history (keeping it on screen)
@@ -398,107 +543,54 @@ func (m *Model) abortTurn(note string) {
 	m.pending, m.results = nil, nil
 	m.history = m.history[:m.turnStart]
 	last := &m.entries[len(m.entries)-1]
-	last.note, last.err = note, true
+	last.note, last.err, last.done = note, true, true
 }
 
 func resultNote(name, out string) string {
 	switch name {
 	case "read_file", "list_dir", "search":
+		if out == "no matches" || out == "(empty directory)" {
+			return out
+		}
 		n := strings.Count(out, "\n")
 		if out != "" && !strings.HasSuffix(out, "\n") {
 			n++
 		}
-		return fmt.Sprintf("%d lines", n)
+		unit := "lines"
+		switch name {
+		case "list_dir":
+			unit = "entries"
+		case "search":
+			unit = "matches"
+		}
+		return fmt.Sprintf("%d %s", n, unit)
 	}
 	return out
 }
 
-func (m *Model) refresh(gotoBottom bool) {
-	if !m.ready {
-		return
+// toolLabel renders a call as Verb(arg), e.g. Update(main.go).
+func toolLabel(name string, in map[string]any) string {
+	verbs := map[string]string{
+		"list_dir": "List", "read_file": "Read", "search": "Search",
+		"write_file": "Write", "edit_file": "Update",
 	}
-	w := m.width - 2
-	if w < 10 {
-		w = 10
+	verb, ok := verbs[name]
+	if !ok {
+		verb = name
 	}
-	body := lipgloss.NewStyle().Width(w).PaddingLeft(2)
-
-	var b strings.Builder
-	if len(m.entries) == 0 {
-		hint := "  Start typing below. Ctrl+N new chat · Esc cancel · wheel/PgUp/PgDn/Shift+↑↓ scroll · Ctrl+C quit"
-		if m.tools != nil {
-			hint += "\n  File tools on in " + m.tools.Root + " · Ctrl+T toggles auto-approve"
+	path, _ := in["path"].(string)
+	if name == "search" {
+		pat, _ := in["pattern"].(string)
+		arg := fmt.Sprintf("%q", pat)
+		if path != "" && path != "." {
+			arg += " in " + path
 		}
-		b.WriteString(dimStyle.Render(hint))
+		return verb + "(" + arg + ")"
 	}
-	for i, e := range m.entries {
-		if i > 0 && e.role != roleTool {
-			b.WriteString("\n")
-		}
-		switch e.role {
-		case roleUser:
-			b.WriteString(userStyle.Render("You") + "\n")
-		case roleAssistant:
-			b.WriteString(botStyle.Render("Assistant") + "\n")
-		case roleTool:
-			b.WriteString(body.Render(toolStyle.Render("⚙ "+e.text)) + "\n")
-			for _, l := range e.preview {
-				st := addStyle
-				if strings.HasPrefix(l, "- ") {
-					st = delStyle
-				} else if !strings.HasPrefix(l, "+ ") {
-					st = dimStyle
-				}
-				b.WriteString(body.Render("  "+st.Render(l)) + "\n")
-			}
-		}
-		if e.role != roleTool {
-			text := e.text
-			if text == "" && m.streaming && i == len(m.entries)-1 {
-				text = dimStyle.Render("thinking…")
-			}
-			if text != "" {
-				b.WriteString(body.Render(text) + "\n")
-			}
-		}
-		if e.note != "" {
-			st := dimStyle
-			if e.err {
-				st = errStyle
-			}
-			b.WriteString(body.Render(st.Render("  → "+e.note)) + "\n")
-		}
+	if path == "" {
+		path = "."
 	}
-	m.vp.SetContent(b.String())
-	if gotoBottom {
-		m.vp.GotoBottom()
-	}
-}
-
-func (m Model) View() string {
-	if !m.ready {
-		return "loading…"
-	}
-	header := headerStyle.Render("converse-tui") + dimStyle.Render(fmt.Sprintf("  %s · %s", m.modelID, m.client.Region()))
-	if m.tools != nil && m.auto {
-		header += "  " + warnStyle.Render("AUTO")
-	}
-
-	status := dimStyle.Render(fmt.Sprintf("tokens in %d · out %d", m.inTok, m.outTok))
-	switch {
-	case m.awaiting && m.outside:
-		status = errStyle.Render("Allow access OUTSIDE the working directory? [y]es  [n]o  Esc cancel")
-	case m.awaiting:
-		status = warnStyle.Render("Apply this change? [y]es  [n]o  [a]lways (auto mode)  Esc cancel")
-	case m.streaming:
-		status = m.sp.View() + dimStyle.Render(" streaming (Esc to cancel) · ") + status
-	}
-	return lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		m.vp.View(),
-		inputStyle.Render(m.ta.View()),
-		status,
-	)
+	return verb + "(" + path + ")"
 }
 
 // viewportKeys limits viewport scrolling to keys that don't collide with the

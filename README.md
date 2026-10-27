@@ -60,6 +60,24 @@ converse-tui -profile work -region us-east-1 -model <inference-profile-id>
 $env:CONVERSE_TUI_MODEL_ID = "<inference-profile-id>"; .\converse-tui.exe
 ```
 
+## Look & feel
+
+The welcome banner, colors and markdown rendering are set in the config file:
+
+```yaml
+banner:
+  text: "My Team Chat"   # drawn as ASCII art
+  font: "slant"          # any FIGlet font: standard, slant, small, big, doom, ...
+  title: "Welcome!"      # line under the banner
+  # art: |               # or paste your own ASCII art (wins over text/font)
+  # show: false          # hide the banner
+accent_color: "#d97757"  # hex or ANSI number ("39")
+theme: dark              # or light
+markdown: true           # render replies as markdown
+```
+
+Slash commands: `/help`, `/clear` (or `/new`), `/auto`, `/exit`.
+
 ## File tools
 
 The model can use `list_dir` (optionally recursive), `search` (regex over file contents), `read_file`, `write_file` and `edit_file` (exact find-and-replace). Start converse-tui in (or point `-workdir` at) the folder that holds your code, e.g. `-workdir C:\src`, so it can work there without outside-directory prompts.
@@ -75,7 +93,7 @@ At an edit prompt: `y` apply, `n` deny (the model is told), `a` apply and turn o
 
 | Key                     | Action |
 |-------------------------|--------|
-| Enter                   | Send |
+| Enter                   | Send (lines starting with `/` are commands) |
 | Alt+Enter / Ctrl+J      | New line |
 | Esc                     | Cancel the response in progress |
 | Ctrl+N                  | New conversation |

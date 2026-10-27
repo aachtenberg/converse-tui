@@ -38,7 +38,33 @@ type Config struct {
 	// Mouse enables wheel scrolling. Defaults to true when unset. While on,
 	// hold Shift to select text with the mouse.
 	Mouse *bool `yaml:"mouse"`
+
+	// Banner is the ASCII-art banner at the top of the chat.
+	Banner Banner `yaml:"banner"`
+	// AccentColor is a hex color ("#d97757") or ANSI color number ("208").
+	AccentColor string `yaml:"accent_color"`
+	// Theme is "dark" (default) or "light"; it picks the markdown and UI palette.
+	Theme string `yaml:"theme"`
+	// Markdown renders assistant replies as markdown. Defaults to true.
+	Markdown *bool `yaml:"markdown"`
 }
+
+// Banner configures the welcome banner.
+type Banner struct {
+	// Show hides the banner when false. Defaults to true.
+	Show *bool `yaml:"show"`
+	// Text is rendered as ASCII art in Font. Default "converse".
+	Text string `yaml:"text"`
+	// Font is a FIGlet font name (standard, slant, small, big, doom, ...).
+	Font string `yaml:"font"`
+	// Art is literal ASCII art; when set it is used instead of Text/Font.
+	Art string `yaml:"art"`
+	// Title is the line under the banner. Default "Welcome to converse-tui".
+	Title string `yaml:"title"`
+}
+
+// MarkdownEnabled reports whether replies are rendered as markdown.
+func (c Config) MarkdownEnabled() bool { return c.Markdown == nil || *c.Markdown }
 
 // MouseEnabled reports whether mouse wheel scrolling is on.
 func (c Config) MouseEnabled() bool { return c.Mouse == nil || *c.Mouse }
@@ -151,6 +177,9 @@ func (c *Config) applyEnv() error {
 func (c Config) Validate() error {
 	if c.ModelID == "" {
 		return errors.New("no model configured: set model_id in the config file, " + EnvModelID + ", or -model (run with -init to create a config file)")
+	}
+	if c.Theme != "" && c.Theme != "dark" && c.Theme != "light" {
+		return errors.New(`theme must be "dark" or "light"`)
 	}
 	if c.MaxTokens < 0 {
 		return errors.New("max_tokens must be >= 0")
