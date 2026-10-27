@@ -61,7 +61,7 @@ $env:CONVERSE_TUI_MODEL_ID = "<inference-profile-id>"; .\converse-tui.exe
 
 ## File tools
 
-The model can use `list_dir`, `read_file`, `write_file` and `edit_file` (exact find-and-replace).
+The model can use `list_dir` (optionally recursive), `search` (regex over file contents), `read_file`, `write_file` and `edit_file` (exact find-and-replace). Start converse-tui in (or point `-workdir` at) the folder that holds your code, e.g. `-workdir C:\src`, so it can work there without outside-directory prompts.
 
 | Where the path is | Read / list | Write / edit |
 |---|---|---|

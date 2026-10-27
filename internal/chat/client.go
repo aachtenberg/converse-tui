@@ -152,9 +152,7 @@ func (c *Client) input(msgs []types.Message) *bedrockruntime.ConverseStreamInput
 		input.System = append(input.System, &types.SystemContentBlockMemberText{Value: c.cfg.SystemPrompt})
 	}
 	if c.tools != nil {
-		input.System = append(input.System, &types.SystemContentBlockMemberText{Value: fmt.Sprintf(
-			"You can list, read, write and edit files under the working directory %s using the provided tools. "+
-				"Paths are relative to it. Read a file before editing it.", c.tools.Root)})
+		input.System = append(input.System, &types.SystemContentBlockMemberText{Value: fmt.Sprintf(toolPrompt, c.tools.Root)})
 		var specs []types.Tool
 		for _, t := range c.tools.Tools() {
 			specs = append(specs, &types.ToolMemberToolSpec{Value: types.ToolSpecification{
@@ -177,6 +175,16 @@ func (c *Client) input(msgs []types.Message) *bedrockruntime.ConverseStreamInput
 	}
 	return input
 }
+
+const toolPrompt = `You are a coding agent working in the directory %s on the user's machine. You have tools to list, search, read, write and edit files there; paths are relative to that directory.
+
+When the user asks for a change, do it yourself with the tools instead of asking them:
+- Explore first: use list_dir (recursive) and search to find the relevant files, then read_file before editing.
+- Make the change with edit_file (or write_file for new files). Do not ask for permission or for file contents: the app shows the user each change and asks them to approve it.
+- Paths outside the working directory (such as ../other or absolute paths) are allowed, but the app asks the user to approve each such call. Just call the tool with the path; never ask for, grant or claim permission in chat, since you cannot change your own access.
+- If the user denies or cancels an action, do not retry it; continue with what you can do or ask what they want instead.
+- Only ask a question when the request is genuinely ambiguous and exploring the code cannot resolve it.
+- When done, briefly say what you changed.`
 
 // accumulator rebuilds content blocks from stream deltas, keyed by index.
 type accumulator struct{ blocks map[int32]*block }

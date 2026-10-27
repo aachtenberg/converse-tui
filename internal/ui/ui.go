@@ -156,7 +156,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.streaming && m.cancel != nil {
 				m.cancel()
 			} else if m.awaiting {
-				m.abortTurn("cancelled")
+				m.cancelTurn()
 				m.refresh(true)
 			}
 			return m, nil
@@ -197,10 +197,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.ta.Reset()
-			m.turnStart = len(m.history)
 			m.rounds = 0
 			m.entries = append(m.entries, entry{role: roleUser, text: text})
-			m.history = append(m.history, chat.UserMessage(text))
+			if n := len(m.history); n > 0 && m.history[n-1].Role == types.ConversationRoleUser {
+				// A cancelled turn left a user message (the request or tool
+				// results) at the end; add to it so roles keep alternating and
+				// the model still sees what happened. turnStart stays at the
+				// cancelled turn so an API error rolls both back.
+				m.history[n-1].Content = append(m.history[n-1].Content, &types.ContentBlockMemberText{Value: text})
+			} else {
+				m.turnStart = len(m.history)
+				m.history = append(m.history, chat.UserMessage(text))
+			}
 			return m, m.startStream()
 		}
 
@@ -258,7 +266,7 @@ func (m *Model) finish(ev chat.Event) tea.Cmd {
 	last := &m.entries[len(m.entries)-1]
 	switch {
 	case errors.Is(ev.Err, context.Canceled):
-		m.abortTurn("cancelled")
+		m.cancelTurn()
 		return nil
 	case ev.Err != nil:
 		m.abortTurn(ev.Err.Error())
@@ -355,6 +363,22 @@ func (m *Model) sendResults() tea.Cmd {
 	return m.startStream()
 }
 
+// cancelTurn stops the turn at the user's request but keeps it in the
+// history, so the model still knows what was asked. Unrun tool calls are
+// answered as cancelled.
+func (m *Model) cancelTurn() {
+	if len(m.pending) > 0 {
+		for _, tu := range m.pending {
+			m.results = append(m.results, chat.ToolResult(tu.ID, "The user cancelled this action.", true))
+		}
+		m.history = append(m.history, types.Message{Role: types.ConversationRoleUser, Content: m.results})
+	}
+	m.streaming, m.awaiting, m.outside = false, false, false
+	m.pending, m.results = nil, nil
+	last := &m.entries[len(m.entries)-1]
+	last.note, last.err = "cancelled", true
+}
+
 // abortTurn drops the current turn from the history (keeping it on screen)
 // so the conversation stays valid for the next message.
 func (m *Model) abortTurn(note string) {
@@ -367,7 +391,7 @@ func (m *Model) abortTurn(note string) {
 
 func resultNote(name, out string) string {
 	switch name {
-	case "read_file", "list_dir":
+	case "read_file", "list_dir", "search":
 		n := strings.Count(out, "\n")
 		if out != "" && !strings.HasSuffix(out, "\n") {
 			n++

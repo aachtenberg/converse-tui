@@ -3,10 +3,13 @@
 package tools
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -16,7 +19,12 @@ const (
 	maxDirEntries  = 500
 	previewLines   = 20
 	previewLineLen = 200
+	maxMatches     = 200
+	maxSearchBytes = 1024 * 1024
 )
+
+// skipDirs are never descended into by recursive listing or search.
+var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, ".venv": true, "__pycache__": true}
 
 // Tool describes one callable tool.
 type Tool struct {
@@ -122,35 +130,105 @@ func prefixLines(prefix, s string) []string {
 var all = []Tool{
 	{
 		Name:        "list_dir",
-		Description: "List files and directories at a path relative to the working directory. Directories end with '/'.",
+		Description: "List files and directories at a path relative to the working directory. Directories end with '/'. Set recursive to list the whole tree (skips .git, node_modules, vendor).",
 		Schema: schema(map[string]any{
-			"path": prop("Directory path, relative to the working directory. Use '.' for the root."),
+			"path":      prop("Directory path, relative to the working directory. Use '.' for the root."),
+			"recursive": map[string]any{"type": "boolean", "description": "List all files below path."},
 		}),
 		run: func(r *Runner, in map[string]any) (string, error) {
 			p, err := r.resolve(str(in, "path"))
 			if err != nil {
 				return "", err
 			}
-			ents, err := os.ReadDir(p)
+			var names []string
+			if rec, _ := in["recursive"].(bool); rec {
+				err = walk(p, func(path string, d fs.DirEntry) error {
+					rel, _ := filepath.Rel(p, path)
+					if d.IsDir() {
+						rel += "/"
+					}
+					names = append(names, filepath.ToSlash(rel))
+					if len(names) > maxDirEntries {
+						return fs.SkipAll
+					}
+					return nil
+				})
+			} else {
+				var ents []os.DirEntry
+				ents, err = os.ReadDir(p)
+				for _, e := range ents {
+					n := e.Name()
+					if e.IsDir() {
+						n += "/"
+					}
+					names = append(names, n)
+				}
+			}
 			if err != nil {
 				return "", err
 			}
-			names := make([]string, 0, len(ents))
-			for _, e := range ents {
-				n := e.Name()
-				if e.IsDir() {
-					n += "/"
-				}
-				names = append(names, n)
-			}
 			sort.Strings(names)
 			if len(names) > maxDirEntries {
-				names = append(names[:maxDirEntries], fmt.Sprintf("… %d more", len(ents)-maxDirEntries))
+				names = append(names[:maxDirEntries], "… (truncated)")
 			}
 			if len(names) == 0 {
 				return "(empty directory)", nil
 			}
 			return strings.Join(names, "\n"), nil
+		},
+	},
+	{
+		Name:        "search",
+		Description: "Search file contents for a regular expression (RE2 syntax) under a directory. Returns matching lines as path:line: text. Use this to find where code is defined or used.",
+		Schema: schema(map[string]any{
+			"pattern": prop("Regular expression to search for."),
+			"path":    prop("Directory or file to search, relative to the working directory. Default '.'."),
+		}, "pattern"),
+		run: func(r *Runner, in map[string]any) (string, error) {
+			re, err := regexp.Compile(str(in, "pattern"))
+			if err != nil {
+				return "", err
+			}
+			p, err := r.resolve(str(in, "path"))
+			if err != nil {
+				return "", err
+			}
+			var out []string
+			err = walk(p, func(path string, d fs.DirEntry) error {
+				if d.IsDir() {
+					return nil
+				}
+				if info, err := d.Info(); err != nil || info.Size() > maxSearchBytes {
+					return nil
+				}
+				b, err := os.ReadFile(path)
+				if err != nil || bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 {
+					return nil // unreadable or binary
+				}
+				rel, _ := filepath.Rel(r.Root, path)
+				for i, line := range strings.Split(string(b), "\n") {
+					if re.MatchString(line) {
+						if len(line) > previewLineLen {
+							line = line[:previewLineLen] + "…"
+						}
+						out = append(out, fmt.Sprintf("%s:%d: %s", filepath.ToSlash(rel), i+1, line))
+						if len(out) >= maxMatches {
+							return fs.SkipAll
+						}
+					}
+				}
+				return nil
+			})
+			if err != nil {
+				return "", err
+			}
+			if len(out) == 0 {
+				return "no matches", nil
+			}
+			if len(out) >= maxMatches {
+				out = append(out, "… (truncated; narrow the pattern or path)")
+			}
+			return strings.Join(out, "\n"), nil
 		},
 	},
 	{
@@ -290,6 +368,29 @@ func (r *Runner) locate(p string) (string, bool, error) {
 		return "", false, err
 	}
 	return p, !within(rootReal, filepath.Join(real, rest)), nil
+}
+
+// walk visits everything below root except skipDirs and symlinks (which
+// could point outside the working directory).
+func walk(root string, fn func(path string, d fs.DirEntry) error) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if path == root {
+			if d.IsDir() {
+				return nil
+			}
+			return fn(path, d)
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		if d.IsDir() && skipDirs[d.Name()] {
+			return fs.SkipDir
+		}
+		return fn(path, d)
+	})
 }
 
 func within(root, p string) bool {
