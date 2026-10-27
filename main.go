@@ -13,6 +13,7 @@ import (
 
 	"github.com/aachtenberg/converse-tui/internal/chat"
 	"github.com/aachtenberg/converse-tui/internal/config"
+	"github.com/aachtenberg/converse-tui/internal/tools"
 	"github.com/aachtenberg/converse-tui/internal/ui"
 )
 
@@ -42,6 +43,9 @@ func run() error {
 	profile := flag.String("profile", "", "AWS profile (overrides config)")
 	region := flag.String("region", "", "AWS region (overrides config)")
 	model := flag.String("model", "", "Bedrock model ID or inference profile (overrides config)")
+	workdir := flag.String("workdir", "", "directory file tools may access (default: current directory)")
+	noTools := flag.Bool("no-tools", false, "disable file tools")
+	auto := flag.Bool("auto", false, "auto-approve file edits (toggle in-app with Ctrl+T)")
 	initCfg := flag.Bool("init", false, "write an example config file to -config path and exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
@@ -77,15 +81,36 @@ func run() error {
 	if *model != "" {
 		cfg.ModelID = *model
 	}
+	if *workdir != "" {
+		cfg.Workdir = *workdir
+	}
+	if *noTools {
+		off := false
+		cfg.Tools = &off
+	}
+	if *auto {
+		cfg.AutoApprove = true
+	}
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
 
-	client, err := chat.New(context.Background(), cfg)
+	var runner *tools.Runner
+	if cfg.ToolsEnabled() {
+		root := cfg.Workdir
+		if root == "" {
+			root = "."
+		}
+		if runner, err = tools.New(root); err != nil {
+			return err
+		}
+	}
+
+	client, err := chat.New(context.Background(), cfg, runner)
 	if err != nil {
 		return err
 	}
 
-	_, err = tea.NewProgram(ui.New(client, cfg.ModelID), tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(ui.New(client, runner, cfg.ModelID, cfg.AutoApprove), tea.WithAltScreen()).Run()
 	return err
 }

@@ -44,6 +44,9 @@ go build -o converse-tui .        # Windows: go build -o converse-tui.exe .
 | `system_prompt` | `CONVERSE_TUI_SYSTEM_PROMPT` |            | optional |
 | `max_tokens`    | `CONVERSE_TUI_MAX_TOKENS`    |            | 0 = model default |
 | `temperature`   | `CONVERSE_TUI_TEMPERATURE`   |            | only sent if set (newer Claude models reject it) |
+| `tools`         | `CONVERSE_TUI_TOOLS`         | `-no-tools`| file tools on/off (default on) |
+| `workdir`       | `CONVERSE_TUI_WORKDIR`       | `-workdir` | directory tools work in; empty = current directory |
+| `auto_approve`  | `CONVERSE_TUI_AUTO_APPROVE`  | `-auto`    | apply edits without asking (toggle with Ctrl+T) |
 | *(file path)*   | `CONVERSE_TUI_CONFIG`        | `-config`  | alternate config file |
 
 Precedence: config file < environment variables < flags. You can also skip the file and use only env vars or flags:
@@ -56,6 +59,17 @@ converse-tui -profile work -region us-east-1 -model <inference-profile-id>
 $env:CONVERSE_TUI_MODEL_ID = "<inference-profile-id>"; .\converse-tui.exe
 ```
 
+## File tools
+
+The model can use `list_dir`, `read_file`, `write_file` and `edit_file` (exact find-and-replace).
+
+| Where the path is | Read / list | Write / edit |
+|---|---|---|
+| Inside the working directory, any depth (`./here`, `./here/there/somewhere`) | runs automatically | asks **y/n** with a preview, unless auto mode is on |
+| Outside it (`../x`, absolute paths, symlinks that point out) | **always asks** | **always asks**, even in auto mode |
+
+At an edit prompt: `y` apply, `n` deny (the model is told), `a` apply and turn on auto mode, `Esc` cancel the turn. The header shows **AUTO** while auto mode is on.
+
 ## Keys
 
 | Key                     | Action |
@@ -64,6 +78,7 @@ $env:CONVERSE_TUI_MODEL_ID = "<inference-profile-id>"; .\converse-tui.exe
 | Alt+Enter / Ctrl+J      | New line |
 | Esc                     | Cancel the response in progress |
 | Ctrl+N                  | New conversation |
+| Ctrl+T                  | Toggle auto-approve for edits |
 | PgUp / PgDn, Ctrl+U / D | Scroll |
 | Ctrl+C                  | Quit |
 

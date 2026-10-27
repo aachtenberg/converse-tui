@@ -33,3 +33,13 @@ max_tokens: 8192
 # Optional sampling temperature. Leave commented out unless you need it;
 # newer Claude models reject this parameter. (CONVERSE_TUI_TEMPERATURE)
 # temperature: 0.7
+
+# Local file tools (list/read/write/edit files). Default: true. (CONVERSE_TUI_TOOLS, -no-tools)
+tools: true
+
+# Directory the tools may access. Empty = the directory you start converse-tui in.
+# (CONVERSE_TUI_WORKDIR, -workdir)
+workdir: ""
+
+# Apply file edits without asking. Toggle in-app with Ctrl+T. (CONVERSE_TUI_AUTO_APPROVE, -auto)
+auto_approve: false

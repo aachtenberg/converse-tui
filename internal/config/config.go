@@ -29,7 +29,16 @@ type Config struct {
 	MaxTokens int32 `yaml:"max_tokens"`
 	// Temperature is only sent when set; some models reject it.
 	Temperature *float32 `yaml:"temperature"`
+	// Tools enables the local file tools. Defaults to true when unset.
+	Tools *bool `yaml:"tools"`
+	// Workdir confines file tools to this directory. Empty = current directory.
+	Workdir string `yaml:"workdir"`
+	// AutoApprove runs file-changing tools without asking.
+	AutoApprove bool `yaml:"auto_approve"`
 }
+
+// ToolsEnabled reports whether file tools are on.
+func (c Config) ToolsEnabled() bool { return c.Tools == nil || *c.Tools }
 
 // Environment variable names that override file values.
 const (
@@ -40,6 +49,9 @@ const (
 	EnvSystemPrompt = "CONVERSE_TUI_SYSTEM_PROMPT"
 	EnvMaxTokens    = "CONVERSE_TUI_MAX_TOKENS"
 	EnvTemperature  = "CONVERSE_TUI_TEMPERATURE"
+	EnvTools        = "CONVERSE_TUI_TOOLS"
+	EnvWorkdir      = "CONVERSE_TUI_WORKDIR"
+	EnvAutoApprove  = "CONVERSE_TUI_AUTO_APPROVE"
 )
 
 // DefaultPath returns the per-user config file location:
@@ -100,6 +112,23 @@ func (c *Config) applyEnv() error {
 		}
 		t := float32(f)
 		c.Temperature = &t
+	}
+	if v, ok := os.LookupEnv(EnvTools); ok && v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("%s: %w", EnvTools, err)
+		}
+		c.Tools = &b
+	}
+	if v, ok := os.LookupEnv(EnvWorkdir); ok {
+		c.Workdir = v
+	}
+	if v, ok := os.LookupEnv(EnvAutoApprove); ok && v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("%s: %w", EnvAutoApprove, err)
+		}
+		c.AutoApprove = b
 	}
 	return nil
 }
