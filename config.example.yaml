@@ -1,0 +1,35 @@
+# converse-tui configuration
+#
+# Default location:
+#   Linux:   ~/.config/converse-tui/config.yaml
+#   Windows: %AppData%\converse-tui\config.yaml
+# Override with -config <path> or CONVERSE_TUI_CONFIG.
+#
+# Every value can also be set with an environment variable (shown in
+# parentheses) or a CLI flag; flags win over env vars, env vars win over this file.
+#
+# AWS credentials are NOT configured here. They come from the normal AWS
+# credential chain: `aws configure`, `aws sso login`, AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY, an EC2/ECS role, etc.
+
+# AWS profile from ~/.aws/config. Empty = AWS_PROFILE or "default". (CONVERSE_TUI_PROFILE, -profile)
+profile: ""
+
+# AWS region. Empty = region from your profile or AWS_REGION. (CONVERSE_TUI_REGION, -region)
+region: us-east-1
+
+# Bedrock model ID or inference profile ID/ARN. Required. (CONVERSE_TUI_MODEL_ID, -model)
+# List what your account can use with:
+#   aws bedrock list-inference-profiles --query "inferenceProfileSummaries[].inferenceProfileId"
+#   aws bedrock list-foundation-models --query "modelSummaries[].modelId"
+model_id: ""
+
+# Optional system prompt. (CONVERSE_TUI_SYSTEM_PROMPT)
+system_prompt: "You are a helpful assistant. Be concise."
+
+# Max response tokens. 0 = model default. (CONVERSE_TUI_MAX_TOKENS)
+max_tokens: 8192
+
+# Optional sampling temperature. Leave commented out unless you need it;
+# newer Claude models reject this parameter. (CONVERSE_TUI_TEMPERATURE)
+# temperature: 0.7
