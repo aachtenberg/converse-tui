@@ -47,6 +47,7 @@ go build -o converse-tui .        # Windows: go build -o converse-tui.exe .
 | `tools`         | `CONVERSE_TUI_TOOLS`         | `-no-tools`| file tools on/off (default on) |
 | `workdir`       | `CONVERSE_TUI_WORKDIR`       | `-workdir` | directory tools work in; empty = current directory |
 | `auto_approve`  | `CONVERSE_TUI_AUTO_APPROVE`  | `-auto`    | apply edits without asking (toggle with Ctrl+T) |
+| `mouse`         | `CONVERSE_TUI_MOUSE`         |            | wheel scrolling (default on); hold Shift to select text |
 | *(file path)*   | `CONVERSE_TUI_CONFIG`        | `-config`  | alternate config file |
 
 Precedence: config file < environment variables < flags. You can also skip the file and use only env vars or flags:
@@ -79,7 +80,8 @@ At an edit prompt: `y` apply, `n` deny (the model is told), `a` apply and turn o
 | Esc                     | Cancel the response in progress |
 | Ctrl+N                  | New conversation |
 | Ctrl+T                  | Toggle auto-approve for edits |
-| PgUp / PgDn, Ctrl+U / D | Scroll |
+| Mouse wheel, PgUp / PgDn, Shift+↑ / ↓, Ctrl+U / D | Scroll |
+| Ctrl+Home / Ctrl+End    | Jump to top / bottom |
 | Ctrl+C                  | Quit |
 
 ## Corporate networks

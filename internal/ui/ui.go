@@ -160,7 +160,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refresh(true)
 			}
 			return m, nil
-		case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		case "ctrl+home":
+			m.vp.GotoTop()
+			return m, nil
+		case "ctrl+end":
+			m.vp.GotoBottom()
+			return m, nil
+		case "pgup", "pgdown", "ctrl+u", "ctrl+d",
+			"shift+up", "shift+down", "ctrl+up", "ctrl+down":
 			var cmd tea.Cmd
 			m.vp, cmd = m.vp.Update(msg)
 			return m, cmd
@@ -211,6 +218,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.startStream()
 		}
+
+	case tea.MouseMsg:
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
 
 	case chunkMsg:
 		last := &m.entries[len(m.entries)-1]
@@ -413,7 +425,7 @@ func (m *Model) refresh(gotoBottom bool) {
 
 	var b strings.Builder
 	if len(m.entries) == 0 {
-		hint := "  Start typing below. Ctrl+N new chat · Esc cancel · PgUp/PgDn scroll · Ctrl+C quit"
+		hint := "  Start typing below. Ctrl+N new chat · Esc cancel · wheel/PgUp/PgDn/Shift+↑↓ scroll · Ctrl+C quit"
 		if m.tools != nil {
 			hint += "\n  File tools on in " + m.tools.Root + " · Ctrl+T toggles auto-approve"
 		}
@@ -497,5 +509,7 @@ func viewportKeys() viewport.KeyMap {
 		PageUp:       key.NewBinding(key.WithKeys("pgup")),
 		HalfPageUp:   key.NewBinding(key.WithKeys("ctrl+u")),
 		HalfPageDown: key.NewBinding(key.WithKeys("ctrl+d")),
+		Up:           key.NewBinding(key.WithKeys("shift+up", "ctrl+up")),
+		Down:         key.NewBinding(key.WithKeys("shift+down", "ctrl+down")),
 	}
 }

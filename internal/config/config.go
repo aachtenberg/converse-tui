@@ -35,7 +35,13 @@ type Config struct {
 	Workdir string `yaml:"workdir"`
 	// AutoApprove runs file-changing tools without asking.
 	AutoApprove bool `yaml:"auto_approve"`
+	// Mouse enables wheel scrolling. Defaults to true when unset. While on,
+	// hold Shift to select text with the mouse.
+	Mouse *bool `yaml:"mouse"`
 }
+
+// MouseEnabled reports whether mouse wheel scrolling is on.
+func (c Config) MouseEnabled() bool { return c.Mouse == nil || *c.Mouse }
 
 // ToolsEnabled reports whether file tools are on.
 func (c Config) ToolsEnabled() bool { return c.Tools == nil || *c.Tools }
@@ -52,6 +58,7 @@ const (
 	EnvTools        = "CONVERSE_TUI_TOOLS"
 	EnvWorkdir      = "CONVERSE_TUI_WORKDIR"
 	EnvAutoApprove  = "CONVERSE_TUI_AUTO_APPROVE"
+	EnvMouse        = "CONVERSE_TUI_MOUSE"
 )
 
 // DefaultPath returns the per-user config file location:
@@ -129,6 +136,13 @@ func (c *Config) applyEnv() error {
 			return fmt.Errorf("%s: %w", EnvAutoApprove, err)
 		}
 		c.AutoApprove = b
+	}
+	if v, ok := os.LookupEnv(EnvMouse); ok && v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("%s: %w", EnvMouse, err)
+		}
+		c.Mouse = &b
 	}
 	return nil
 }

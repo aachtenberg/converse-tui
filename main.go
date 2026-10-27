@@ -111,6 +111,10 @@ func run() error {
 		return err
 	}
 
-	_, err = tea.NewProgram(ui.New(client, runner, cfg.ModelID, cfg.AutoApprove), tea.WithAltScreen()).Run()
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if cfg.MouseEnabled() {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	_, err = tea.NewProgram(ui.New(client, runner, cfg.ModelID, cfg.AutoApprove), opts...).Run()
 	return err
 }

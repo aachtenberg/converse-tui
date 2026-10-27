@@ -43,3 +43,7 @@ workdir: ""
 
 # Apply file edits without asking. Toggle in-app with Ctrl+T. (CONVERSE_TUI_AUTO_APPROVE, -auto)
 auto_approve: false
+
+# Mouse wheel scrolls the chat. While on, hold Shift to select/copy text with
+# the mouse. Set false to restore normal mouse selection. (CONVERSE_TUI_MOUSE)
+mouse: true
